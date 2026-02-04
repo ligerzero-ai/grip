@@ -20,64 +20,57 @@ class GenericCalculator(Calculator):
     """
     Generic calculator that wraps user-provided functions.
     
-    This calculator is designed to be maximally flexible. You provide:
-    
-    1. An energy function: atoms -> energy (float in eV)
-    2. Optionally, a relax function: atoms -> (relaxed_atoms, energy)
-    
-    The relax function returns BOTH results to avoid double calculation.
+    This calculator is designed to be maximally flexible. You only need to provide
+    ONE function - typically relax_function which returns both structure AND energy.
     
     Example usage:
     
-        # Simple case: just energy function
+        # RECOMMENDED: Just provide relax_function (returns both structure and energy)
+        def my_relax(atoms):
+            relaxed = optimizer.run(atoms)
+            energy = model.predict(relaxed)
+            return relaxed, energy  # Returns BOTH!
+        
+        calc = GenericCalculator(relax_function=my_relax)
+        
+        # Alternative: Only energy function (no relaxation)
         def my_energy(atoms):
             return some_model.predict(atoms)
         
         calc = GenericCalculator(energy_function=my_energy)
         
-        # With relaxation that returns both
-        def my_relax(atoms):
-            relaxed = optimizer.run(atoms)
-            energy = model.predict(relaxed)
-            return relaxed, energy
+        # With MD support
+        def my_md(atoms, temperature, steps):
+            final_atoms = run_md(atoms, T=temperature, n=steps)
+            energy = model.predict(final_atoms)
+            return final_atoms, energy
         
-        calc = GenericCalculator(
-            energy_function=my_energy,
-            relax_function=my_relax
-        )
-        
-        # With combined function (relax returns energy too)
-        def my_relax_with_energy(atoms):
-            relaxed, trajectory = optimizer.run(atoms)
-            final_energy = trajectory[-1].energy
-            return relaxed, final_energy
-        
-        calc = GenericCalculator(
-            energy_function=my_energy,
-            relax_function=my_relax_with_energy
-        )
+        calc = GenericCalculator(relax_function=my_relax, md_function=my_md)
     """
     
     def __init__(
         self,
-        energy_function: Callable[[Atoms], float],
         relax_function: Optional[Callable[[Atoms], Tuple[Atoms, float]]] = None,
+        energy_function: Optional[Callable[[Atoms], float]] = None,
         md_function: Optional[Callable[[Atoms, float, int], Tuple[Atoms, float]]] = None,
         name: str = "GenericCalculator"
     ):
         """
         Initialize the generic calculator.
         
+        You typically only need to provide relax_function, which returns BOTH
+        the relaxed structure AND the energy in a single call.
+        
         Args:
-            energy_function: Function that takes Atoms and returns energy in eV.
-                Signature: (atoms: Atoms) -> float
-                
-            relax_function: Optional function that relaxes structure AND returns energy.
+            relax_function: Function that relaxes structure AND returns energy.
                 Signature: (atoms: Atoms) -> Tuple[Atoms, float]
                 Returns: (relaxed_atoms, final_energy_in_eV)
+                This is the primary function for GRIP workflows.
                 
-                If not provided, calculate_energy will be called on the
-                unrelaxed structure (no actual relaxation performed).
+            energy_function: Optional function for single-point energy only.
+                Signature: (atoms: Atoms) -> float
+                Only needed if you want single-point calculations without relaxation,
+                or if relax_function returns only atoms (not energy).
                 
             md_function: Optional function for molecular dynamics.
                 Signature: (atoms: Atoms, temperature: float, steps: int) -> Tuple[Atoms, float]
@@ -85,8 +78,13 @@ class GenericCalculator(Calculator):
                 
             name: Name for this calculator (for logging/debugging)
         """
-        self.energy_function = energy_function
+        if relax_function is None and energy_function is None:
+            raise ValueError(
+                "Must provide at least one of: relax_function or energy_function"
+            )
+        
         self.relax_function = relax_function
+        self.energy_function = energy_function
         self.md_function = md_function
         self.name = name
     
@@ -101,24 +99,30 @@ class GenericCalculator(Calculator):
         Returns:
             CalculationResult with energy (atoms unchanged)
         """
-        try:
-            energy = self.energy_function(atoms)
-        except TypeError:
-            # Function doesn't accept kwargs
-            energy = self.energy_function(atoms)
-        
-        return CalculationResult(
-            atoms=atoms.copy(),
-            energy=energy,
-            converged=True,
-            metadata={'calculator': self.name, 'type': 'single_point'}
-        )
+        if self.energy_function is not None:
+            try:
+                energy = self.energy_function(atoms, **kwargs)
+            except TypeError:
+                energy = self.energy_function(atoms)
+            
+            return CalculationResult(
+                atoms=atoms.copy(),
+                energy=energy,
+                converged=True,
+                metadata={'calculator': self.name, 'type': 'single_point'}
+            )
+        elif self.relax_function is not None:
+            # Fall back to relax_function if no energy_function
+            # (less efficient but works)
+            return self.relax_structure(atoms, **kwargs)
+        else:
+            raise RuntimeError("No energy_function or relax_function available")
     
     def relax_structure(self, atoms: Atoms, **kwargs) -> CalculationResult:
         """
         Relax structure and return both relaxed atoms AND energy.
         
-        This is the key method - it returns both results from a single
+        This is the PRIMARY method - it returns both results from a single
         calculation, avoiding the need to evaluate energy twice.
         
         Args:
@@ -132,8 +136,11 @@ class GenericCalculator(Calculator):
                 - converged: True (assumed unless relax_function indicates otherwise)
         """
         if self.relax_function is None:
-            # No relaxation function provided - just return single-point energy
-            return self.calculate_energy(atoms, **kwargs)
+            if self.energy_function is not None:
+                # No relaxation - just return single-point energy
+                return self.calculate_energy(atoms, **kwargs)
+            else:
+                raise RuntimeError("No relax_function or energy_function available")
         
         # Call relax function which returns (atoms, energy)
         try:
@@ -158,9 +165,16 @@ class GenericCalculator(Calculator):
             # Already a CalculationResult
             return result
         elif isinstance(result, Atoms):
-            # Only returned atoms - need to calculate energy
+            # Only returned atoms - need to calculate energy separately
             relaxed_atoms = result
-            energy = self.energy_function(relaxed_atoms)
+            if self.energy_function is not None:
+                energy = self.energy_function(relaxed_atoms)
+            else:
+                raise ValueError(
+                    "relax_function returned only Atoms without energy, "
+                    "but no energy_function was provided. "
+                    "Either return (atoms, energy) tuple or provide energy_function."
+                )
             converged = True
         else:
             raise ValueError(
@@ -231,9 +245,14 @@ class GenericCalculator(Calculator):
         return self.md_function is not None
     
     def __repr__(self):
-        has_relax = "with relaxation" if self.relax_function else "single-point only"
-        has_md = ", MD enabled" if self.md_function else ""
-        return f"GenericCalculator({self.name}, {has_relax}{has_md})"
+        features = []
+        if self.relax_function:
+            features.append("relax")
+        if self.energy_function:
+            features.append("energy")
+        if self.md_function:
+            features.append("MD")
+        return f"GenericCalculator({self.name}, {'+'.join(features) or 'no functions'})"
 
 
 # Convenience function to create calculator from ASE calculator
