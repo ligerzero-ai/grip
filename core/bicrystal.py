@@ -331,20 +331,30 @@ class Bicrystal():
         self.gb = upper_copy
 
 
-    def write_gb(self, filename: str) -> None:
+    def write_gb(self, filename: str, format: str = "lammps-data") -> None:
         """
-        Write the joined GB structure to a LAMMPS data file.
+        Write the joined GB structure to a file.
 
         Args:
             filename (str): Filename of GB structure.
+            format (str): Output format. Options:
+                - "lammps-data" (default): LAMMPS data format
+                - "vasp", "poscar": VASP POSCAR format
+                - "xyz": XYZ format
+                - "extxyz": Extended XYZ format
+                - Any other ASE-supported format
 
         Returns:
-            None, but a lammps-data file is written.
+            None, but a file is written.
         """
         assert self.gb is not None, "GB hasn't been created yet! Use the " + \
             "join_gb() method before calling write_gb()."
 
-        write_lammps_data(filename, self.gb)
+        if format == "lammps-data":
+            write_lammps_data(filename, self.gb)
+        else:
+            from ase.io import write as ase_write
+            ase_write(filename, self.gb, format=format)
 
 
     def get_edge_midpts(self, pts: list, rv: list) -> np.ndarray:

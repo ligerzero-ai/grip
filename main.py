@@ -1,40 +1,89 @@
 #!/usr/bin/env python3
+"""
+GRand canonical Interface Predictor (GRIP)
+
+Main entry point for grain boundary optimization using grand canonical sampling.
+
+This version supports multiple calculation backends through the Calculator interface:
+- LAMMPS (original backend)
+- ASE calculators (EMT, LJ, ML potentials)
+- Generic user-provided functions
+
+Usage:
+    python main.py                     # Run with default params.yaml
+    python main.py -i my_params.yaml   # Run with custom parameters
+    python main.py -d                  # Debug mode (terminates early)
+    python main.py --help              # Show all options
+"""
+
 import os
 from argparse import ArgumentParser
+from typing import Optional
 import numpy as np
 
 from core.bicrystal import Bicrystal
 from core.simulation import Simulation
+from core.calculator import Calculator
 from utils.utils import make_dirs, get_inputs, make_crystals, compute_weights, \
                   get_xy_translation, get_xy_replications
 
-##############################################################################
 
-def main(infile: str, debug: bool) -> None:
+def create_calculator(algo: dict, struct: dict) -> Optional[Calculator]:
+    """
+    Create a calculator from configuration.
+    
+    Args:
+        algo: Algorithm parameters dictionary
+        struct: Structure parameters dictionary
+        
+    Returns:
+        Calculator instance or None for debug mode
+    """
+    # New-style calculator config
+    if "calculator" in algo:
+        from core.calculators import get_calculator
+        return get_calculator(algo["calculator"])
+    
+    # Legacy LAMMPS config
+    if "lammps_bin" in algo:
+        from core.calculators.lammps_calc import LAMMPSCalculator
+        return LAMMPSCalculator(
+            binary=algo["lammps_bin"],
+            pair_style=struct["pair_style"],
+            pair_coeff=struct["pair_coeff"],
+            mass=struct["mass"],
+        )
+    
+    return None
+
+
+def main(infile: str, debug: bool, calculator: Optional[Calculator] = None) -> None:
     """
     Performs grand canonical optimization of GB structures.
 
     Args:
         infile (str): YAML file of simulation parameters.
-        Defaults to params.yaml.
-
         debug (bool): Flag for running in DEBUG mode.
-        Defaults to False.
+        calculator (Calculator, optional): Pre-configured calculator.
+            If None, will be created from config file.
 
     Returns:
         None.
     """
-
-    # Read in parameters from YAML file.
+    # Read in parameters from YAML file
     struct, algo = get_inputs(infile, debug)
 
+    # Create calculator if not provided
+    if calculator is None:
+        calculator = create_calculator(algo, struct)
+    
     # Create a Simulation object to orchestrate the simulation
-    sim = Simulation(struct, algo, debug)
+    sim = Simulation(struct, algo, calculator, debug)
     if debug: print(f"Starting GRIP calculations from {sim.root}")
     if debug: print(f"This process is running in {sim.cfold}")
-    # Note: The logging package might make debugging print statements easier.
+    if debug and calculator: print(f"Using calculator: {calculator}")
 
-    # Create relevant directories like "best," "calc_proc#," etc
+    # Create relevant directories
     make_dirs(sim.pid, algo["dir_struct"], algo["dir_calcs"])
 
     # Use structure parameters to create upper and lower bulk slabs
@@ -42,15 +91,16 @@ def main(infile: str, debug: bool) -> None:
 
     # Compute the weights for replications
     weights = compute_weights(struct)
-    if debug: print(f"The weight are: {weights}")
+    if debug: print(f"The weights are: {weights}")
 
     # Create a Bicrystal object from the two bulk slabs
     bicrystal = Bicrystal(lower_0, upper_0, struct, algo, dlat,
                           make_copy=False, debug=debug)
 
     ##########################################################################
-
-    # This loop samples different GB structures
+    # Main optimization loop - samples different GB structures
+    ##########################################################################
+    
     while sim.counter < sim.nruns or not sim.nruns:
 
         if debug: print(f"\n~~~~~ Starting simulation iteration {sim.counter+1} ~~~~~\n")
@@ -65,7 +115,7 @@ def main(infile: str, debug: bool) -> None:
 
         # Get the bounds of the GB region for MD
         bicrystal.get_bounds(algo)
-        if debug: print(f"Bounds for MD simulation (lower, upper, pad): \n{bicrystal.bounds}\n")
+        if debug: print(f"Bounds for simulation (lower, upper, pad): \n{bicrystal.bounds}\n")
 
         # Sample a replication amount and replicate bicrystal in xy directions
         rx, ry = get_xy_replications(rng, weights)
@@ -95,7 +145,7 @@ def main(infile: str, debug: bool) -> None:
         swapped_n = bicrystal.find_and_swap_inters(rng)
         if debug: print(f"Swapping {swapped_n} GB atoms with interstitial sites.\n")
 
-        # Write the GB structure to a file that is the initial structure for LAMMPS
+        # Write the GB structure to a file (input for calculator)
         input_struct_file = os.path.join(algo["dir_calcs"], f"{algo['dir_calcs']}_{sim.pid+1}", "STRUC")
         bicrystal.write_gb(input_struct_file)
 
@@ -106,21 +156,22 @@ def main(infile: str, debug: bool) -> None:
         sim.sample_params(rng)
         if debug: print(f"The simulation parameters are T={sim.md_T}, N={sim.md_steps}")
 
-        # Run the MD simulation to produce a final, relaxed GB structure
-        if debug: print(f"Running MD sampling")
-        sim.run_md(bicrystal, update_gb=True)
+        # Run the calculation to produce a final, relaxed GB structure
+        if debug: print(f"Running calculation...")
+        result = sim.run_calculation(bicrystal, update_gb=True)
+        if debug: print(f"Calculation converged: {result.converged}")
 
-        # Get the GB energy from the last line in the final file (lammps_end_STRUC)
+        # Get the GB energy
         sim.get_gb_energy(bicrystal)
 
         if debug: print(bicrystal)
         if debug: print(f"GB structure is {bicrystal.gb}\n")
         if debug: print(f"The GB energy is {bicrystal.Egb} J/m^2\n")
 
-        # Store the energy in a list and save the file to the "best" folder
+        # Store the energy and save the file to the "best" folder
         sim.store_best_structs(bicrystal)
 
-        if debug:# and sim.counter == 3:
+        if debug:
             assert False, "Terminated early in DEBUG mode."
 
 ##############################################################################
@@ -132,12 +183,16 @@ if __name__ == "__main__":
     parser.add_argument("-d", "--debug", action="store_true",
                         help="Run in DEBUG mode, which prints variables and terminates early.")
     parser.add_argument("-s", "--seed", type=int, default=1,
-                        help="Random seed for debugging.")
+                        help="Random seed for reproducibility.")
+    parser.add_argument("-e", "--engine", type=str, default=None,
+                        help="Override calculator engine (lammps, ase, etc.)")
     args = parser.parse_args()
+    
     infile = args.input
     debug = args.debug
     seed = args.seed
 
+    # Set up random number generator
     if debug:
         rng = np.random.default_rng(seed=seed)
     else:

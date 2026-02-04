@@ -1,4 +1,7 @@
 # Input data for the GRand canonical Interface Predictor (GRIP). Format is YAML.
+# 
+# This configuration supports both legacy LAMMPS config and the new calculator interface.
+# See examples below for different calculator backends.
 
 # Parameters for the algorithm
 algo:
@@ -29,10 +32,32 @@ algo:
     MD_max: 500000          # Max steps for MD simulation.
     var_steps: 2            # 0 = Min steps only; 1 = linear sample; 2 = exponential sample
 
-    lammps_bin: '/g/g16/chen120/bin/lammps_serial'     # Absolute path to [serial] LAMMPS binary or shell command.
     Emult: 2                # Maximum energy threshold * Egb_min to keep; at least 1.0.
     nruns: 0                # Number of iterations in total (each processor). Set 0 for infinite loop.
     clear_freq: 50          # Number of iterations before clearing duplicates. Set 0 to never clear.
+
+    # =========================================================================
+    # CALCULATOR CONFIGURATION
+    # =========================================================================
+    # Option 1: Legacy LAMMPS config (for backward compatibility)
+    lammps_bin: '/g/g16/chen120/bin/lammps_serial'     # Path to LAMMPS binary
+    
+    # Option 2: New calculator interface (comment out lammps_bin to use this)
+    # calculator:
+    #     engine: 'lammps'    # Options: 'lammps', 'ase', 'generic'
+    #     
+    #     # LAMMPS-specific settings
+    #     lammps:
+    #         binary: '/path/to/lammps'
+    #         pair_style: 'meam/spline'
+    #         pair_coeff: '* * /path/to/Ti.meam.spline Ti'
+    #         mass: 47.867
+    #     
+    #     # ASE calculator settings (for ML potentials, EMT, etc.)
+    #     # ase:
+    #     #     calculator: 'EMT'      # or 'MACE', 'CHGNet', etc.
+    #     #     kwargs:                # passed to calculator constructor
+    #     #         model_path: '/path/to/model.pt'  # for MACE
 
 
 # Parameters for the material
@@ -50,18 +75,68 @@ struct:
     symbol: 'Ti'            # Chemical formula
     crystal: 'hcp'          # fcc, bcc, hcp, or dc
     mass: 47.867            # Atomic mass
-    # HENNIG
-    a: 2.9305               # a lattice constant at 0K; potential dependent; provide to 4 decimal places.
-    c: 4.6783               # c lattice constant at 0K; hcp only, ignored for others
-    dlat: 0.703883          # Minimal normal component of lattice vector to calculate Nplane. Required if user=True. Set 0 to ignore.
-    Ecoh: -4.8312           # Energy per atom in bulk; potential dependent; provide to 4 decimal places.
-    pair_style: 'meam/spline'               # pair_style for LAMMPS
-    pair_coeff: '* * /g/g16/chen120/lammps/pots/Ti.meam.spline Ti'     # pair_coeff for LAMMPS
-    # ZOPE
-    #a: 2.9527              # a lattice constant at 0K; potential dependent; provide to 4 decimal places.
-    #c: 4.6808              # c lattice constant; hcp only, ignored for others
-    #dlat: 0.0              # Minimal normal component of lattice vector to calculate Nplane. Required if user=True. Set 0 to ignore.
-    #Ecoh: -4.8500          # Energy per atom in bulk; potential dependent; provide to 4 decimal places.
-    #pair_style: 'eam/alloy'                 # pair_style for LAMMPS
-    #pair_coeff: '* * /g/g16/chen120/lammps/pots/TiAl.eam.alloy Ti'     # pair_coeff for LAMMPS
+    
+    # Lattice parameters and cohesive energy (potential dependent!)
+    a: 2.9305               # a lattice constant at 0K
+    c: 4.6783               # c lattice constant at 0K; hcp only
+    dlat: 0.703883          # Minimal normal component of lattice vector. Required if user=True. Set 0 to ignore.
+    Ecoh: -4.8312           # Energy per atom in bulk (eV); potential dependent
+    
+    # LAMMPS potential settings (used with legacy config or lammps calculator)
+    pair_style: 'meam/spline'
+    pair_coeff: '* * /g/g16/chen120/lammps/pots/Ti.meam.spline Ti'
 
+
+# =========================================================================
+# EXAMPLE CONFIGURATIONS FOR DIFFERENT CALCULATORS
+# =========================================================================
+#
+# Example 1: Using ASE's EMT calculator (fast, for testing)
+# ---------------------------------------------------------
+# algo:
+#     calculator:
+#         engine: 'ase'
+#         ase:
+#             calculator: 'EMT'
+#
+# Example 2: Using MACE ML potential
+# ----------------------------------
+# algo:
+#     calculator:
+#         engine: 'ase'
+#         ase:
+#             calculator: 'MACE'
+#             kwargs:
+#                 model_path: '/path/to/mace_model.pt'
+#                 device: 'cuda'
+#
+# Example 3: Using CHGNet
+# -----------------------
+# algo:
+#     calculator:
+#         engine: 'ase'
+#         ase:
+#             calculator: 'CHGNet'
+#
+# Example 4: Using a generic custom function
+# ------------------------------------------
+# In your Python script:
+#
+#   from core.calculators import GenericCalculator
+#   
+#   def my_energy(atoms):
+#       return my_model.predict(atoms)
+#   
+#   def my_relax(atoms):
+#       relaxed = my_optimizer.run(atoms)
+#       energy = my_model.predict(relaxed)
+#       return relaxed, energy  # Returns BOTH!
+#   
+#   calc = GenericCalculator(
+#       energy_function=my_energy,
+#       relax_function=my_relax
+#   )
+#   
+#   # Then pass to main():
+#   from main import main
+#   main('params.yaml', debug=False, calculator=calc)
