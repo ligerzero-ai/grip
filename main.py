@@ -57,7 +57,8 @@ def create_calculator(algo: dict, struct: dict) -> Optional[Calculator]:
     return None
 
 
-def main(infile: str, debug: bool, calculator: Optional[Calculator] = None) -> None:
+def main(infile: str, debug: bool, calculator: Optional[Calculator] = None,
+         rng: Optional[np.random.Generator] = None) -> None:
     """
     Performs grand canonical optimization of GB structures.
 
@@ -66,10 +67,19 @@ def main(infile: str, debug: bool, calculator: Optional[Calculator] = None) -> N
         debug (bool): Flag for running in DEBUG mode.
         calculator (Calculator, optional): Pre-configured calculator.
             If None, will be created from config file.
+        rng (np.random.Generator, optional): Random number generator.
+            If None, creates a new one (seeded in debug mode).
 
     Returns:
         None.
     """
+    # Set up random number generator if not provided
+    if rng is None:
+        if debug:
+            rng = np.random.default_rng(seed=1)
+        else:
+            rng = np.random.default_rng()
+    
     # Read in parameters from YAML file
     struct, algo = get_inputs(infile, debug)
 
@@ -198,4 +208,4 @@ if __name__ == "__main__":
     else:
         rng = np.random.default_rng()
 
-    main(infile, debug)
+    main(infile, debug, rng=rng)

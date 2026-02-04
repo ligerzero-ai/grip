@@ -1,0 +1,70 @@
+algo:
+  Emult: 2
+  MD_max: 0
+  MD_min: 0
+  MD_run: 0.0
+  Tmax: 600
+  Tmin: 300
+  clear_freq: 0
+  dir_calcs: calc_procs
+  dir_struct: best
+  frac_max: 1.0
+  frac_min: 0.5
+  gb_gap: 0.5
+  gb_thick: 5
+  inter_n: 0
+  inter_p: 0.0
+  inter_r: true
+  inter_s: Cu
+  inter_t: 1.5
+  inter_u: false
+  inter_w: 2
+  ngrid: 10
+  nruns: 1
+  pad: 3
+  perturb_l: 0.0
+  perturb_u: 0.0
+  vacuum: 1
+  var_steps: 0
+struct:
+  Ecoh: -0.005
+  a: 3.615
+  c: 3.615
+  crystal: fcc
+  cutoff: 15
+  dlat: 1.8075
+  lower_dirs:
+  - - 1
+    - 0
+    - 0
+  - - 0
+    - 1
+    - 0
+  - - 0
+    - 0
+    - 1
+  mass: 63.546
+  pair_coeff: none
+  pair_style: none
+  reps: 1
+  size:
+  - 1
+  - 1
+  - 5
+  size0:
+  - 1
+  - 1
+  - 1
+  symbol: Cu
+  upper_dirs:
+  - - 1
+    - 0
+    - 0
+  - - 0
+    - 1
+    - 0
+  - - 0
+    - 0
+    - 1
+  user: false
+  write: false
